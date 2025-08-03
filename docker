@@ -1,0 +1,39 @@
+# Base image with Python
+FROM python:3.10-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Create app directory
+WORKDIR /app
+
+# Install system dependencies for FAISS, Ollama, etc.
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    build-essential \
+    ffmpeg \
+    libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Ollama (adds llama3 support)
+RUN curl -fsSL https://ollama.com/install.sh | sh
+
+# Copy Python files
+COPY . /app/
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Expose FastAPI port
+EXPOSE 8000
+
+# Pull model before runtime (optional optimization)
+RUN ollama pull llama3
+
+# Start Ollama in background and then FastAPI
+CMD ollama serve & uvicorn app:app --host 0.0.0.0 --port 8000
