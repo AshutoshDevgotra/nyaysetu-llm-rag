@@ -26,8 +26,8 @@ def extract_text_from_all_pdfs(folder_path):
 
     return all_text_data
 
-# Update this to your correct folder path
-pdf_folder = r"C:\Users\abc\Desktop\nyaysetu-pdf-acts\indiacode_pdfs"
+# Use relative path to pdfs folder
+pdf_folder = "pdfs"
 
 documents = extract_text_from_all_pdfs(pdf_folder)
 

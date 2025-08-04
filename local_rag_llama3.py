@@ -5,7 +5,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.docstore.document import Document
-from langchain_community.llms import Ollama
+from langchain_ollama import OllamaLLM
 from langchain.chains import RetrievalQA
 import argparse
 
@@ -48,7 +48,7 @@ print(" FAISS index saved locally.")
 
 # Step 5: Load LLaMA 3 (from Ollama, must be running)
 print(" Loading LLaMA 3 via Ollama...")
-llm = Ollama(model="llama3")
+llm = OllamaLLM(model="llama3")
 print(" LLaMA 3 model loaded.")
 
 # Step 6: Setup RAG chain
