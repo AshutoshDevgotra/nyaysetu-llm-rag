@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"name": "nyaysetu-llm-rag",
+			"path": "."
+		}
+	],
+	"settings": {
+		"vscode-corda.isCordaProject": false
+	}
+}

@@ -13,7 +13,8 @@ app = FastAPI()
 # CORS setup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Update to your production domain when deployed
+    allow_origins=["http://localhost:3000", "https://5d3afed1-db17-4418-b1cb-20a34fb68d73-00-1clvsy0si5hmr.janeway.replit.dev/"
+    ,"https://nyaysetu-platform-h2yl.vercel.app/"],  # Update to your production domain when deployed
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -59,5 +60,5 @@ async def ask_question(data: QueryInput):
 # Needed to make Render detect open port
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 5000))
     uvicorn.run("app:app", host="0.0.0.0", port=port)
