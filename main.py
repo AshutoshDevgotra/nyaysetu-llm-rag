@@ -92,7 +92,7 @@ def main():
         import uvicorn
         
         # Fixed port for consistent access
-        port = 8080
+        port = 8082
         host = "0.0.0.0"
         
         logger.info(f"🚀 Starting server on {host}:{port}")
