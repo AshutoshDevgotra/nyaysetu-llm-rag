@@ -33,13 +33,14 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="NyaySetu Legal Q&A System", version="1.0.0")
 
-# CORS setup - Allow frontend access
+# CORS setup - Allow frontend access with explicit configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific domains
+    allow_origins=["*"],  # Allow all origins for development
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Input models for POST requests
@@ -54,10 +55,10 @@ class QueryResponse(BaseModel):
 class ShortResponseLLM(LLM):
     """LLM wrapper that ensures short, concise responses (1-3 lines)"""
     
-    base_llm: Any
+    base_llm: Any = None
     
-    def __init__(self, base_llm):
-        super().__init__()
+    def __init__(self, base_llm, **kwargs):
+        super().__init__(**kwargs)
         self.base_llm = base_llm
     
     @property
@@ -90,8 +91,8 @@ class LLMFallback(LLM):
     
     generator: Any = None
     
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         if TRANSFORMERS_AVAILABLE:
             try:
                 # Use a lightweight model for text generation
@@ -140,6 +141,9 @@ class LLMFallback(LLM):
 
 class SimpleFallbackLLM(LLM):
     """Simple rule-based fallback when no LLM is available - provides short responses"""
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
     
     @property
     def _llm_type(self) -> str:
@@ -420,7 +424,7 @@ async def welcome_page():
                 
                 <h4>Example Usage:</h4>
                 <pre style="background: #2c3e50; color: white; padding: 15px; border-radius: 5px; overflow-x: auto;">
-curl -X POST "http://localhost:8080/ask" \\
+curl -X POST "http://localhost:8082/ask" \\
      -H "Content-Type: application/json" \\
      -d '{"query": "What are the key provisions of contract law?"}'
                 </pre>
@@ -439,6 +443,8 @@ curl -X POST "http://localhost:8080/ask" \\
 @app.post("/ask", response_model=QueryResponse)
 async def ask_question(data: QueryInput):
     """Handle legal question queries - returns short, concise answers"""
+    logger.info(f"Received POST request to /ask from frontend")
+    
     if not qa_chain:
         raise HTTPException(
             status_code=503, 
@@ -451,7 +457,7 @@ async def ask_question(data: QueryInput):
             raise HTTPException(status_code=400, detail="Query cannot be empty")
         
         query = data.query.strip()
-        logger.info(f"Processing query: {query[:50]}...")
+        logger.info(f"Processing query from frontend: {query[:50]}...")
         
         # Process the query through the RAG chain
         result = qa_chain.invoke({"query": query})
@@ -468,7 +474,7 @@ async def ask_question(data: QueryInput):
         if len(answer) > 300:
             answer = answer[:297] + "..."
         
-        logger.info("Successfully processed query")
+        logger.info(f"Successfully processed query from frontend, returning: {answer[:50]}...")
         return QueryResponse(
             answer=answer,
             query=query,
@@ -476,7 +482,7 @@ async def ask_question(data: QueryInput):
         )
         
     except Exception as e:
-        logger.error(f"Error processing query: {e}")
+        logger.error(f"Error processing query from frontend: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to process query: {str(e)}"
@@ -503,8 +509,23 @@ async def health_check():
     
     return JSONResponse(content=status)
 
+@app.get("/test")
+async def test_endpoint():
+    """Simple test endpoint for frontend connectivity"""
+    return JSONResponse(content={
+        "message": "Backend is running successfully!",
+        "port": 8082,
+        "timestamp": "2024-01-01T00:00:00Z",
+        "cors_enabled": True
+    })
+
+@app.options("/ask")
+async def ask_options():
+    """Handle preflight OPTIONS request for /ask endpoint"""
+    return JSONResponse(content={"message": "OK"})
+
 # Fixed port configuration
-FIXED_PORT = 8080
+FIXED_PORT = 8082
 
 if __name__ == "__main__":
     import uvicorn
