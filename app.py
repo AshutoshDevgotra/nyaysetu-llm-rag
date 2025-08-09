@@ -1,4 +1,7 @@
 import os
+import json
+import logging
+from typing import List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,8 +9,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.chains import RetrievalQA
-import json
-import logging
+from langchain_core.language_models.llms import LLM
+from langchain_core.callbacks.manager import CallbackManagerForLLMRun
+from typing import Any
 
 # Try to import Ollama, fallback to HuggingFace if not available
 try:
@@ -38,13 +42,56 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Input model for POST requests
+# Input models for POST requests
 class QueryInput(BaseModel):
     query: str
 
-class LLMFallback:
+class QueryResponse(BaseModel):
+    answer: str
+    query: str
+    status: str
+
+class ShortResponseLLM(LLM):
+    """LLM wrapper that ensures short, concise responses (1-3 lines)"""
+    
+    base_llm: Any
+    
+    def __init__(self, base_llm):
+        super().__init__()
+        self.base_llm = base_llm
+    
+    @property
+    def _llm_type(self) -> str:
+        return "short_response"
+    
+    def _call(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> str:
+        # Add instruction for short responses
+        short_prompt = f"{prompt}\n\nProvide a concise answer in 1-3 sentences maximum."
+        
+        try:
+            response = self.base_llm.invoke(short_prompt)
+            # Truncate response to ensure it's concise
+            sentences = response.split('.')
+            if len(sentences) > 3:
+                response = '. '.join(sentences[:3]) + '.'
+            return response[:300] + "..." if len(response) > 300 else response
+        except Exception as e:
+            logger.error(f"Error in short response LLM: {e}")
+            return "Unable to process query at the moment."
+
+class LLMFallback(LLM):
     """Fallback LLM implementation using HuggingFace transformers"""
+    
+    generator: Any = None
+    
     def __init__(self):
+        super().__init__()
         if TRANSFORMERS_AVAILABLE:
             try:
                 # Use a lightweight model for text generation
@@ -53,7 +100,7 @@ class LLMFallback:
                     model="microsoft/DialoGPT-small",
                     tokenizer="microsoft/DialoGPT-small",
                     return_full_text=False,
-                    max_length=512,
+                    max_length=150,  # Reduced for shorter responses
                     do_sample=True,
                     temperature=0.7
                 )
@@ -63,42 +110,74 @@ class LLMFallback:
                 self.generator = None
         else:
             self.generator = None
-
-    def invoke(self, prompt):
+    
+    @property
+    def _llm_type(self) -> str:
+        return "fallback"
+    
+    def _call(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> str:
         if self.generator:
             try:
-                response = self.generator(prompt, max_length=200, num_return_sequences=1)
-                return response[0]['generated_text'] if response else "I apologize, but I'm unable to process your query at the moment."
+                response = self.generator(prompt, max_length=100, num_return_sequences=1)
+                result = response[0]['generated_text'] if response else "Unable to process query."
+                # Keep responses short
+                return result[:200] + "..." if len(result) > 200 else result
             except Exception as e:
                 logger.error(f"Error in fallback LLM: {e}")
-                return "I apologize, but I'm unable to process your query at the moment."
+                return "Unable to process query at the moment."
         else:
-            return "I apologize, but the language model is currently unavailable."
-
-class SimpleFallbackLLM:
-    """Simple rule-based fallback when no LLM is available"""
+            return "Language model currently unavailable."
     
     def invoke(self, prompt):
-        """Provide simple responses based on keywords"""
+        """Compatibility method for direct invocation"""
+        return self._call(prompt)
+
+class SimpleFallbackLLM(LLM):
+    """Simple rule-based fallback when no LLM is available - provides short responses"""
+    
+    @property
+    def _llm_type(self) -> str:
+        return "simple_fallback"
+    
+    def _call(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> str:
+        """Provide simple, concise responses based on keywords (1-2 sentences max)"""
         prompt_lower = prompt.lower()
         
         if "contract" in prompt_lower:
-            return "A contract is a legally binding agreement between parties. Key elements include offer, acceptance, consideration, capacity, and legality."
+            return "A contract requires offer, acceptance, consideration, and legal capacity. It creates binding obligations between parties."
         elif "property" in prompt_lower:
-            return "Property law governs ownership rights in real property (land) and personal property (movable items)."
+            return "Property law governs ownership of real estate and personal property. It includes rights to use, transfer, and exclude others."
         elif "criminal" in prompt_lower or "crime" in prompt_lower:
-            return "Criminal law defines crimes and punishments. Elements include actus reus (guilty act) and mens rea (guilty mind)."
+            return "Criminal law defines crimes and punishments. It requires both guilty act (actus reus) and guilty mind (mens rea)."
         elif "tort" in prompt_lower:
-            return "Tort law provides remedies for civil wrongs. Types include intentional torts, negligence, and strict liability."
+            return "Tort law provides remedies for civil wrongs like negligence and intentional harm. It allows victims to seek compensation."
         elif "constitutional" in prompt_lower:
-            return "Constitutional law deals with fundamental government principles including separation of powers and individual rights."
-        elif "business" in prompt_lower:
-            return "Business law encompasses legal rules governing commercial transactions, including contracts, employment, and corporate governance."
+            return "Constitutional law governs government powers and individual rights. It ensures separation of powers and fundamental freedoms."
+        elif "business" in prompt_lower or "corporate" in prompt_lower:
+            return "Business law covers commercial transactions, corporate governance, and employment. It regulates how businesses operate legally."
+        elif "court" in prompt_lower or "procedure" in prompt_lower:
+            return "Court procedures govern how legal cases are filed and heard. They ensure fair process and proper jurisdiction."
         else:
-            return "I can help with legal questions about contracts, property, criminal law, torts, constitutional law, and business law. Please ask a specific question."
+            return "I help with legal questions on contracts, property, criminal law, torts, and constitutional matters. Please ask a specific question."
+    
+    def invoke(self, prompt):
+        """Compatibility method for direct invocation"""
+        return self._call(prompt)
 
 class SimpleQAChain:
-    """Simple QA chain that uses keyword search in JSON data"""
+    """Simple QA chain that uses keyword search in JSON data - provides short answers"""
     
     def __init__(self):
         self.legal_data = self.load_legal_data()
@@ -125,29 +204,34 @@ class SimpleQAChain:
             # Simple keyword matching
             if any(keyword in text for keyword in query_lower.split()):
                 relevant_docs.append({
-                    "content": doc.get("text", "")[:500] + "...",
+                    "content": doc.get("text", "")[:300],  # Shorter content for concise responses
                     "source": source
                 })
         
-        return relevant_docs[:3]  # Return top 3 matches
+        return relevant_docs[:2]  # Return top 2 matches for brevity
     
     def invoke(self, input_dict):
-        """Process query and return response"""
+        """Process query and return short, concise response"""
         query = input_dict.get("query", "")
         
         # Find relevant documents
         relevant_docs = self.find_relevant_content(query)
         
         if relevant_docs:
-            # Create context from relevant documents
-            context = "\n\n".join([doc["content"] for doc in relevant_docs])
-            enhanced_prompt = f"Based on this legal information: {context}\n\nQuestion: {query}\n\nAnswer:"
+            # Create brief context from relevant documents
+            context = relevant_docs[0]["content"]  # Use only the most relevant doc
+            enhanced_prompt = f"Based on this legal text: {context}\n\nQuestion: {query}\n\nProvide a brief 1-2 sentence answer:"
             answer = self.llm.invoke(enhanced_prompt)
         else:
             # Fallback to basic response
             answer = self.llm.invoke(query)
         
-        return {"result": answer}
+        # Ensure answer is concise
+        sentences = answer.split('.')
+        if len(sentences) > 3:
+            answer = '. '.join(sentences[:3]) + '.'
+        
+        return {"result": answer[:250] + "..." if len(answer) > 250 else answer}
 
 # Global variables for RAG components
 vectorstore = None
@@ -194,20 +278,24 @@ def initialize_rag_system():
             # Set up retriever
             retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
             
-            # Initialize LLM with fallback
+            # Initialize LLM with fallback and short response wrapper
             logger.info("Initializing LLM...")
+            base_llm = None
             if OLLAMA_AVAILABLE:
                 try:
-                    llm = OllamaLLM(model="llama3")
+                    base_llm = OllamaLLM(model="llama3")
                     # Test the connection
-                    test_response = llm.invoke("Hello")
+                    test_response = base_llm.invoke("Hello")
                     logger.info("Successfully initialized Ollama LLM")
                 except Exception as e:
                     logger.warning(f"Ollama not available, using fallback: {e}")
-                    llm = LLMFallback()
+                    base_llm = LLMFallback()
             else:
                 logger.info("Ollama not available, using fallback LLM")
-                llm = LLMFallback()
+                base_llm = LLMFallback()
+            
+            # Wrap LLM to ensure short responses
+            llm = ShortResponseLLM(base_llm)
             
             # Create the RetrievalQA chain
             logger.info("Creating RetrievalQA chain...")
@@ -236,7 +324,7 @@ def initialize_simple_search_system():
     try:
         logger.info("Initializing simple search system...")
         
-        # Use simple fallback LLM
+        # Use simple fallback LLM - no wrapper needed as it's already short
         llm = SimpleFallbackLLM()
         
         # Create a simple QA handler
@@ -280,11 +368,13 @@ def create_vectorstore_from_json(embedding_model):
         raise
 
 # Initialize the RAG system on startup
-@app.on_event("startup")
-async def startup_event():
+def startup_event():
     success = initialize_rag_system()
     if not success:
         logger.error("Failed to initialize RAG system. Some features may not work.")
+
+# Call startup event
+startup_event()
 
 @app.get("/", response_class=HTMLResponse)
 async def welcome_page():
@@ -316,6 +406,7 @@ async def welcome_page():
                 <ul>
                     <li>Legal document question-answering using RAG (Retrieval-Augmented Generation)</li>
                     <li>FAISS vector search for efficient document retrieval</li>
+                    <li>Short, concise responses (1-3 sentences maximum)</li>
                     <li>Support for multiple LLM backends (Ollama + HuggingFace fallback)</li>
                     <li>Pre-processed legal document knowledge base</li>
                 </ul>
@@ -329,10 +420,12 @@ async def welcome_page():
                 
                 <h4>Example Usage:</h4>
                 <pre style="background: #2c3e50; color: white; padding: 15px; border-radius: 5px; overflow-x: auto;">
-curl -X POST "http://localhost:5000/ask" \\
+curl -X POST "http://localhost:8080/ask" \\
      -H "Content-Type: application/json" \\
      -d '{"query": "What are the key provisions of contract law?"}'
                 </pre>
+                
+                <p><strong>Note:</strong> All responses are kept short and concise (1-3 sentences) for quick understanding.</p>
             </div>
             
             <div style="text-align: center; margin-top: 30px;">
@@ -343,9 +436,9 @@ curl -X POST "http://localhost:5000/ask" \\
     </html>
     """
 
-@app.post("/ask")
+@app.post("/ask", response_model=QueryResponse)
 async def ask_question(data: QueryInput):
-    """Handle legal question queries"""
+    """Handle legal question queries - returns short, concise answers"""
     if not qa_chain:
         raise HTTPException(
             status_code=503, 
@@ -358,30 +451,38 @@ async def ask_question(data: QueryInput):
             raise HTTPException(status_code=400, detail="Query cannot be empty")
         
         query = data.query.strip()
-        logger.info(f"Processing query: {query[:100]}...")
+        logger.info(f"Processing query: {query[:50]}...")
         
         # Process the query through the RAG chain
         result = qa_chain.invoke({"query": query})
         
-        # Extract the answer
-        answer = result.get("result", "I couldn't generate a proper response.")
+        # Extract the answer and ensure it's concise
+        answer = result.get("result", "Unable to generate a response.")
+        
+        # Double-check answer length (max 3 sentences)
+        sentences = answer.split('.')
+        if len(sentences) > 3:
+            answer = '. '.join(sentences[:3]) + '.'
+        
+        # Limit to 300 characters max
+        if len(answer) > 300:
+            answer = answer[:297] + "..."
         
         logger.info("Successfully processed query")
-        return JSONResponse(content={
-            "answer": answer,
-            "query": query,
-            "status": "success"
-        })
+        return QueryResponse(
+            answer=answer,
+            query=query,
+            status="success"
+        )
         
     except Exception as e:
         logger.error(f"Error processing query: {e}")
-        return JSONResponse(
-            content={
-                "error": f"Failed to process query: {str(e)}",
-                "status": "error"
-            }, 
-            status_code=500
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process query: {str(e)}"
         )
+
+
 
 @app.get("/health")
 async def health_check():
@@ -402,9 +503,10 @@ async def health_check():
     
     return JSONResponse(content=status)
 
-# For Replit deployment - bind to port 5000 for frontend access
+# Fixed port configuration
+FIXED_PORT = 8080
+
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 5000))
-    logger.info(f"Starting NyaySetu server on port {port}")
-    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=False)
+    logger.info(f"Starting NyaySetu server on fixed port {FIXED_PORT}")
+    uvicorn.run("app:app", host="0.0.0.0", port=FIXED_PORT, reload=False)

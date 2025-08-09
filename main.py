@@ -91,8 +91,8 @@ def main():
         from app import app
         import uvicorn
         
-        # Get port from environment (Replit uses PORT env var)
-        port = int(os.environ.get("PORT", 5000))
+        # Fixed port for consistent access
+        port = 8080
         host = "0.0.0.0"
         
         logger.info(f"🚀 Starting server on {host}:{port}")
