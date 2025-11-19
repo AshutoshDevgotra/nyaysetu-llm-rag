@@ -13,12 +13,12 @@ from langchain_core.language_models.llms import LLM
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
 from typing import Any
 
-# Try to import Ollama, fallback to HuggingFace if not available
+# Gemini / Google Generative AI
 try:
-    from langchain_ollama import OllamaLLM
-    OLLAMA_AVAILABLE = True
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    GEMINI_AVAILABLE = True
 except ImportError:
-    OLLAMA_AVAILABLE = False
+    GEMINI_AVAILABLE = False
 
 # Fallback LLM imports
 try:
@@ -56,6 +56,7 @@ class ShortResponseLLM(LLM):
     """LLM wrapper that ensures short, concise responses (1-3 lines)"""
     
     base_llm: Any = None
+    model_config = {"arbitrary_types_allowed": True}
     
     def __init__(self, base_llm, **kwargs):
         super().__init__(**kwargs)
@@ -77,11 +78,15 @@ class ShortResponseLLM(LLM):
         
         try:
             response = self.base_llm.invoke(short_prompt)
+            if hasattr(response, "content"):
+                response_text = response.content
+            else:
+                response_text = str(response)
             # Truncate response to ensure it's concise
-            sentences = response.split('.')
+            sentences = response_text.split('.')
             if len(sentences) > 3:
-                response = '. '.join(sentences[:3]) + '.'
-            return response[:300] + "..." if len(response) > 300 else response
+                response_text = '. '.join(sentences[:3]) + '.'
+            return response_text[:300] + "..." if len(response_text) > 300 else response_text
         except Exception as e:
             logger.error(f"Error in short response LLM: {e}")
             return "Unable to process query at the moment."
@@ -90,6 +95,7 @@ class LLMFallback(LLM):
     """Fallback LLM implementation using HuggingFace transformers"""
     
     generator: Any = None
+    model_config = {"arbitrary_types_allowed": True}
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -141,6 +147,8 @@ class LLMFallback(LLM):
 
 class SimpleFallbackLLM(LLM):
     """Simple rule-based fallback when no LLM is available - provides short responses"""
+    
+    model_config = {"arbitrary_types_allowed": True}
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -242,10 +250,52 @@ vectorstore = None
 retriever = None
 llm = None
 qa_chain = None
+current_llm_provider = "uninitialized"
+current_llm_model = "uninitialized"
+
+
+def get_llm_provider() -> str:
+    """Return the configured LLM provider."""
+    return os.getenv("LLM_PROVIDER", "gemini").strip().lower()
+
+
+def build_primary_llm():
+    """Create the primary LLM based on environment configuration."""
+    provider = get_llm_provider()
+    temperature = float(os.getenv("LLM_TEMPERATURE", "0.2"))
+    max_tokens = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "256"))
+    model_name = os.getenv("LLM_MODEL", "llama3")
+    
+    if provider == "gemini":
+        if not GEMINI_AVAILABLE:
+            raise RuntimeError("Gemini client not installed. Please install langchain-google-genai.")
+        
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY not set. Please add it to your environment.")
+        
+        model_name = os.getenv("LLM_MODEL", "gemini-1.5-flash")
+        logger.info(f"Initializing Gemini model '{model_name}'")
+        base_llm = ChatGoogleGenerativeAI(
+            model=model_name,
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+            google_api_key=api_key,
+        )
+        provider_name = "gemini"
+    
+    else:
+        logger.warning(f"Unsupported LLM_PROVIDER '{provider}', falling back to transformers pipeline.")
+        base_llm = LLMFallback()
+        provider_name = "fallback"
+        model_name = "transformers-fallback"
+    
+    short_llm = ShortResponseLLM(base_llm=base_llm)
+    return short_llm, provider_name, model_name
 
 def initialize_rag_system():
     """Initialize the RAG system with error handling"""
-    global vectorstore, retriever, llm, qa_chain
+    global vectorstore, retriever, llm, qa_chain, current_llm_provider, current_llm_model
     
     try:
         # First try to initialize with full ML stack
@@ -282,24 +332,20 @@ def initialize_rag_system():
             # Set up retriever
             retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
             
-            # Initialize LLM with fallback and short response wrapper
+            # Initialize LLM with environment-based provider selection
             logger.info("Initializing LLM...")
-            base_llm = None
-            if OLLAMA_AVAILABLE:
-                try:
-                    base_llm = OllamaLLM(model="llama3")
-                    # Test the connection
-                    test_response = base_llm.invoke("Hello")
-                    logger.info("Successfully initialized Ollama LLM")
-                except Exception as e:
-                    logger.warning(f"Ollama not available, using fallback: {e}")
-                    base_llm = LLMFallback()
-            else:
-                logger.info("Ollama not available, using fallback LLM")
-                base_llm = LLMFallback()
-            
-            # Wrap LLM to ensure short responses
-            llm = ShortResponseLLM(base_llm)
+            try:
+                llm_instance, provider_name, model_name = build_primary_llm()
+                llm = llm_instance
+                global current_llm_provider, current_llm_model
+                current_llm_provider = provider_name
+                current_llm_model = model_name
+                logger.info(f"LLM initialized using provider='{provider_name}' model='{model_name}'")
+            except Exception as llm_error:
+                logger.warning(f"Primary LLM initialization failed: {llm_error}. Falling back to transformers pipeline.")
+                llm = ShortResponseLLM(LLMFallback())
+                current_llm_provider = "fallback"
+                current_llm_model = "transformers-fallback"
             
             # Create the RetrievalQA chain
             logger.info("Creating RetrievalQA chain...")
@@ -323,7 +369,7 @@ def initialize_rag_system():
 
 def initialize_simple_search_system():
     """Initialize a simple keyword-based search system as fallback"""
-    global llm, qa_chain
+    global llm, qa_chain, current_llm_provider, current_llm_model
     
     try:
         logger.info("Initializing simple search system...")
@@ -333,6 +379,8 @@ def initialize_simple_search_system():
         
         # Create a simple QA handler
         qa_chain = SimpleQAChain()
+        current_llm_provider = "simple-fallback"
+        current_llm_model = "keyword-search"
         
         logger.info("Simple search system initialized successfully")
         return True
@@ -411,7 +459,7 @@ async def welcome_page():
                     <li>Legal document question-answering using RAG (Retrieval-Augmented Generation)</li>
                     <li>FAISS vector search for efficient document retrieval</li>
                     <li>Short, concise responses (1-3 sentences maximum)</li>
-                    <li>Support for multiple LLM backends (Ollama + HuggingFace fallback)</li>
+                    <li>Support for Gemini primary backend with HuggingFace/simple fallback</li>
                     <li>Pre-processed legal document knowledge base</li>
                 </ul>
             </div>
@@ -497,9 +545,10 @@ async def health_check():
         "status": "healthy",
         "rag_system": qa_chain is not None,
         "vectorstore": vectorstore is not None,
-        "llm_type": "ollama" if OLLAMA_AVAILABLE else "fallback",
+        "llm_type": current_llm_provider,
+        "llm_model": current_llm_model,
         "components": {
-            "ollama_available": OLLAMA_AVAILABLE,
+            "gemini_available": GEMINI_AVAILABLE,
             "transformers_available": TRANSFORMERS_AVAILABLE,
             "vectorstore_loaded": vectorstore is not None,
             "retriever_ready": retriever is not None,
@@ -514,7 +563,9 @@ async def test_endpoint():
     """Simple test endpoint for frontend connectivity"""
     return JSONResponse(content={
         "message": "Backend is running successfully!",
-        "port": 8082,
+        "port": FIXED_PORT,
+        "llm_provider": current_llm_provider,
+        "llm_model": current_llm_model,
         "timestamp": "2024-01-01T00:00:00Z",
         "cors_enabled": True
     })

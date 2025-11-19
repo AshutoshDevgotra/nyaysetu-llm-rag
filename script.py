@@ -129,7 +129,7 @@ def start_server():
 
 def main():
     """Main setup function"""
-    print("🏛️  NyaySetu Legal RAG System Setup")
+    print("🏛️  NyayaDwar Legal RAG System Setup")
     print("=" * 50)
     
     # Check dependencies
