@@ -9,7 +9,6 @@ gunicorn>=21.0.0
 langchain==0.1.20
 langchain-core==0.1.52
 langchain-community==0.0.38
-langchain-openai>=0.0.5
 
 # Basic utilities
 python-dotenv>=1.0.0
@@ -21,5 +20,5 @@ pinecone-client>=3.0.0
 langchain-pinecone>=0.0.3
 PyPDF2>=3.0.0
 
-# OpenAI for embeddings and LLM
+# Gemini for embeddings and LLM
 langchain-google-genai>=0.0.3
