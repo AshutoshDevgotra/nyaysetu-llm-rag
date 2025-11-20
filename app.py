@@ -7,7 +7,10 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from langchain_community.vectorstores import FAISS
-from langchain.chains import RetrievalQA
+try:
+    from langchain.chains import RetrievalQA
+except ImportError:
+    from langchain_community.chains import RetrievalQA
 from langchain_core.language_models.llms import LLM
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
 from typing import Any
