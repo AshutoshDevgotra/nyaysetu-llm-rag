@@ -12,6 +12,11 @@ from langchain.chains import RetrievalQA
 from langchain_core.language_models.llms import LLM
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
 from typing import Any
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv(".env.local")
+load_dotenv()  # Also try loading default .env
 
 # Gemini / Google Generative AI
 try:
@@ -51,6 +56,8 @@ class QueryResponse(BaseModel):
     answer: str
     query: str
     status: str
+    metadata: Optional[dict] = None
+    sources: Optional[List[dict]] = None
 
 class ShortResponseLLM(LLM):
     """LLM wrapper that ensures short, concise responses (1-3 lines)"""
@@ -352,7 +359,7 @@ def initialize_rag_system():
             qa_chain = RetrievalQA.from_chain_type(
                 llm=llm,
                 retriever=retriever,
-                return_source_documents=False
+                return_source_documents=True  # Changed to True to get sources
             )
             
             logger.info("RAG system initialized successfully")
@@ -513,6 +520,15 @@ async def ask_question(data: QueryInput):
         # Extract the answer and ensure it's concise
         answer = result.get("result", "Unable to generate a response.")
         
+        # Extract sources if available
+        sources = []
+        if "source_documents" in result:
+            for doc in result["source_documents"]:
+                sources.append({
+                    "content": doc.page_content[:200] + "...",
+                    "metadata": doc.metadata
+                })
+        
         # Double-check answer length (max 3 sentences)
         sentences = answer.split('.')
         if len(sentences) > 3:
@@ -526,7 +542,13 @@ async def ask_question(data: QueryInput):
         return QueryResponse(
             answer=answer,
             query=query,
-            status="success"
+            status="success",
+            metadata={
+                "model": current_llm_model,
+                "provider": current_llm_provider,
+                "timestamp": "now" # You might want to use actual timestamp
+            },
+            sources=sources
         )
         
     except Exception as e:
@@ -535,8 +557,6 @@ async def ask_question(data: QueryInput):
             status_code=500,
             detail=f"Failed to process query: {str(e)}"
         )
-
-
 
 @app.get("/health")
 async def health_check():
