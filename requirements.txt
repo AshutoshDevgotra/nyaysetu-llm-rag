@@ -5,10 +5,10 @@ fastapi>=0.100.0
 uvicorn>=0.23.0
 gunicorn>=21.0.0
 
-# LangChain packages (pinned for stability)
-langchain==0.1.20
-langchain-core==0.1.52
-langchain-community==0.0.38
+# LangChain packages (compatible versions)
+langchain>=0.3.0
+langchain-core>=0.3.34
+langchain-community>=0.3.0
 
 # Basic utilities
 python-dotenv>=1.0.0
