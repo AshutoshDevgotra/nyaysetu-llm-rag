@@ -7,7 +7,6 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.chains import RetrievalQA
 from langchain_core.language_models.llms import LLM
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
@@ -281,7 +280,7 @@ def build_primary_llm():
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY not set. Please add it to your environment.")
         
-        model_name = os.getenv("LLM_MODEL", "gemini-1.5-flash")
+        model_name = os.getenv("LLM_MODEL", "gemini-2.0-flash")
         logger.info(f"Initializing Gemini model '{model_name}'")
         base_llm = ChatGoogleGenerativeAI(
             model=model_name,
@@ -297,8 +296,7 @@ def build_primary_llm():
         provider_name = "fallback"
         model_name = "transformers-fallback"
     
-    short_llm = ShortResponseLLM(base_llm=base_llm)
-    return short_llm, provider_name, model_name
+    return base_llm, provider_name, model_name
 
 def initialize_rag_system():
     """Initialize the RAG system with error handling"""
@@ -307,34 +305,45 @@ def initialize_rag_system():
     try:
         # First try to initialize with full ML stack
         try:
-            # Load embeddings
-            logger.info("Loading embedding model...")
-            embedding_model = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/paraphrase-MiniLM-L6-v2"
-            )
+            logger.info("Initializing Gemini embedding model (models/text-embedding-004)...")
+            gemini_api_key = os.getenv("GEMINI_API_KEY")
+            pinecone_api_key = os.getenv("PINECONE_API_KEY")
+            # Use the Gemini-specific index
+            index_name = "nyayadwaar-gemini"
             
-            # Try to load existing FAISS index
-            logger.info("Loading FAISS vector store...")
-            try:
-                vectorstore = FAISS.load_local(
-                    "nyaysetu_faiss_index", 
-                    embedding_model, 
-                    allow_dangerous_deserialization=True
-                )
-                logger.info("Successfully loaded nyaysetu_faiss_index")
-            except Exception as e:
-                logger.warning(f"Failed to load nyaysetu_faiss_index: {e}")
-                try:
-                    vectorstore = FAISS.load_local(
-                        "faiss_index", 
-                        embedding_model, 
-                        allow_dangerous_deserialization=True
-                    )
-                    logger.info("Successfully loaded faiss_index")
-                except Exception as e2:
-                    logger.error(f"Failed to load any FAISS index: {e2}")
-                    # Create a minimal vector store from JSON if available
-                    vectorstore = create_vectorstore_from_json(embedding_model)
+            if not gemini_api_key:
+                raise RuntimeError("GEMINI_API_KEY not set in environment variables")
+            if not pinecone_api_key:
+                raise RuntimeError("PINECONE_API_KEY not set in environment variables")
+            
+            from langchain_google_genai import GoogleGenerativeAIEmbeddings
+            embedding_model = GoogleGenerativeAIEmbeddings(
+                model="models/text-embedding-004",
+                google_api_key=gemini_api_key
+            )
+            logger.info("✅ Gemini embeddings initialized")
+            
+            # Initialize Pinecone Vector Store
+            logger.info(f"Connecting to Pinecone index '{index_name}'...")
+            
+            from langchain_pinecone import PineconeVectorStore
+            from pinecone import Pinecone
+            
+            # Initialize Pinecone client
+            pc = Pinecone(api_key=pinecone_api_key)
+            
+            # Check if index exists
+            existing_indexes = [index.name for index in pc.list_indexes()]
+            if index_name not in existing_indexes:
+                logger.warning(f"Pinecone index '{index_name}' does not exist. Please run build_vectorstore_gemini.py first.")
+                # Fallback to empty or error? Let's try to initialize anyway, it might error later if empty.
+            
+            vectorstore = PineconeVectorStore(
+                index_name=index_name,
+                embedding=embedding_model,
+                pinecone_api_key=pinecone_api_key
+            )
+            logger.info(f"Successfully connected to Pinecone index '{index_name}'")
             
             # Set up retriever
             retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
@@ -359,7 +368,7 @@ def initialize_rag_system():
             qa_chain = RetrievalQA.from_chain_type(
                 llm=llm,
                 retriever=retriever,
-                return_source_documents=True  # Changed to True to get sources
+                return_source_documents=True
             )
             
             logger.info("RAG system initialized successfully")
@@ -367,6 +376,8 @@ def initialize_rag_system():
             
         except Exception as e:
             logger.warning(f"Full ML stack failed, falling back to simple mode: {e}")
+            import traceback
+            traceback.print_exc()
             # Fallback to simple text search without ML models
             return initialize_simple_search_system()
         
@@ -395,36 +406,6 @@ def initialize_simple_search_system():
     except Exception as e:
         logger.error(f"Failed to initialize simple search system: {e}")
         return False
-
-def create_vectorstore_from_json(embedding_model):
-    """Create a vectorstore from JSON data if FAISS indices are not available"""
-    logger.info("Attempting to create vectorstore from JSON data...")
-    
-    try:
-        with open("nyaysetu_pdf_texts.json", "r", encoding="utf-8") as f:
-            data = json.load(f)
-        
-        texts = []
-        metadatas = []
-        
-        for item in data:
-            if isinstance(item, dict) and "text" in item:
-                texts.append(item["text"])
-                metadatas.append({"source": item.get("source", "unknown")})
-            elif isinstance(item, str):
-                texts.append(item)
-                metadatas.append({"source": "unknown"})
-        
-        if texts:
-            vectorstore = FAISS.from_texts(texts, embedding_model, metadatas=metadatas)
-            logger.info(f"Created vectorstore from {len(texts)} text chunks")
-            return vectorstore
-        else:
-            raise ValueError("No valid texts found in JSON data")
-            
-    except Exception as e:
-        logger.error(f"Failed to create vectorstore from JSON: {e}")
-        raise
 
 # Initialize the RAG system on startup
 def startup_event():
@@ -529,16 +510,7 @@ async def ask_question(data: QueryInput):
                     "metadata": doc.metadata
                 })
         
-        # Double-check answer length (max 3 sentences)
-        sentences = answer.split('.')
-        if len(sentences) > 3:
-            answer = '. '.join(sentences[:3]) + '.'
-        
-        # Limit to 300 characters max
-        if len(answer) > 300:
-            answer = answer[:297] + "..."
-        
-        logger.info(f"Successfully processed query from frontend, returning: {answer[:50]}...")
+        logger.info(f"Successfully processed query from frontend, returning answer of length: {len(answer)}")
         return QueryResponse(
             answer=answer,
             query=query,

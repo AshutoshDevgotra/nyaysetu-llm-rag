@@ -8,8 +8,7 @@ gunicorn>=21.0.0
 # LangChain packages
 langchain>=0.1.0
 langchain-community>=0.0.20
-langchain-huggingface>=0.0.3
-langchain-google-genai>=0.0.5
+langchain-openai>=0.0.5
 
 # Basic utilities
 python-dotenv>=1.0.0
@@ -17,7 +16,9 @@ requests>=2.31.0
 pydantic>=2.0.0
 
 # Additional dependencies for RAG
-faiss-cpu>=1.7.0
-sentence-transformers>=2.2.0
+pinecone-client>=3.0.0
+langchain-pinecone>=0.0.3
 PyPDF2>=3.0.0
-google-generativeai>=0.5.0
+
+# OpenAI for embeddings and LLM
+langchain-google-genai>=0.0.3
