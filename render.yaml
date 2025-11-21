@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: nyaysetu-rag-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: LLM_MODEL
+        value: gemini-2.0-flash
+      - key: LLM_TEMPERATURE
+        value: 0.2
+      - key: LLM_MAX_OUTPUT_TOKENS
+        value: 256

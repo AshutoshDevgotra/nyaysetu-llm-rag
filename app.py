@@ -488,7 +488,8 @@ async def ask_question(data: QueryInput):
     """Handle legal question queries - returns short, concise answers"""
     logger.info(f"Received POST request to /ask from frontend")
     
-    if not qa_chain:
+    # Check if RAG system is ready (retriever and llm)
+    if not retriever or not llm:
         raise HTTPException(
             status_code=503, 
             detail="RAG system not properly initialized. Please check system logs."
@@ -565,11 +566,9 @@ async def health_check():
         "llm_type": current_llm_provider,
         "llm_model": current_llm_model,
         "components": {
-            "gemini_available": GEMINI_AVAILABLE,
-            "transformers_available": TRANSFORMERS_AVAILABLE,
             "vectorstore_loaded": vectorstore is not None,
             "retriever_ready": retriever is not None,
-            "qa_chain_ready": qa_chain is not None
+            "llm_ready": llm is not None
         }
     }
     return JSONResponse(content=status)
