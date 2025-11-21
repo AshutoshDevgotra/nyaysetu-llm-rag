@@ -257,6 +257,7 @@ llm = None
 qa_chain = None
 current_llm_provider = "uninitialized"
 current_llm_model = "uninitialized"
+initialization_error = None  # Track initialization errors
 
 
 def get_llm_provider() -> str:
@@ -299,7 +300,7 @@ def build_primary_llm():
 
 def initialize_rag_system():
     """Initialize the RAG system with error handling"""
-    global vectorstore, retriever, llm, qa_chain, current_llm_provider, current_llm_model
+    global vectorstore, retriever, llm, qa_chain, current_llm_provider, current_llm_model, initialization_error
     
     try:
         # First try to initialize with full ML stack
@@ -311,9 +312,15 @@ def initialize_rag_system():
             index_name = "nyayadwaar-gemini"
             
             if not gemini_api_key:
-                raise RuntimeError("GEMINI_API_KEY not set in environment variables")
+                error_msg = "GEMINI_API_KEY not set in environment variables"
+                logger.error(error_msg)
+                initialization_error = error_msg
+                raise RuntimeError(error_msg)
             if not pinecone_api_key:
-                raise RuntimeError("PINECONE_API_KEY not set in environment variables")
+                error_msg = "PINECONE_API_KEY not set in environment variables"
+                logger.error(error_msg)
+                initialization_error = error_msg
+                raise RuntimeError(error_msg)
             
             from langchain_google_genai import GoogleGenerativeAIEmbeddings
             embedding_model = GoogleGenerativeAIEmbeddings(
@@ -373,7 +380,9 @@ def initialize_rag_system():
             return True
             
         except Exception as e:
-            logger.warning(f"Full ML stack failed, falling back to simple mode: {e}")
+            error_msg = f"Full ML stack failed: {str(e)}"
+            logger.warning(error_msg)
+            initialization_error = error_msg
             import traceback
             traceback.print_exc()
             # Fallback to simple text search without ML models
@@ -551,7 +560,7 @@ async def health_check():
     """Health check endpoint"""
     status = {
         "status": "healthy",
-        "rag_system": qa_chain is not None,
+        "rag_system": retriever is not None and llm is not None,
         "vectorstore": vectorstore is not None,
         "llm_type": current_llm_provider,
         "llm_model": current_llm_model,
@@ -563,8 +572,24 @@ async def health_check():
             "qa_chain_ready": qa_chain is not None
         }
     }
-    
     return JSONResponse(content=status)
+
+@app.get("/debug_info")
+async def debug_info():
+    """Return debugging info about LLM provider and vectorstore type."""
+    info = {
+        "llm_provider": current_llm_provider,
+        "llm_model": current_llm_model,
+        "vectorstore_type": "Pinecone" if vectorstore is not None else "None",
+        "gemini_available": GEMINI_AVAILABLE,
+        "pinecone_api_key_set": bool(os.getenv("PINECONE_API_KEY")),
+        "gemini_api_key_set": bool(os.getenv("GEMINI_API_KEY")),
+        "initialization_error": initialization_error,
+        "retriever_ready": retriever is not None,
+        "llm_ready": llm is not None
+    }
+    return JSONResponse(content=info)
+
 
 @app.get("/test")
 async def test_endpoint():
