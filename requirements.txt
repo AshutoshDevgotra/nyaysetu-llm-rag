@@ -6,10 +6,10 @@ uvicorn>=0.23.0
 gunicorn>=21.0.0
 
 # LangChain packages (compatible versions)
-langchain>=0.3.0
-langchain-core>=0.3.34
-langchain-community>=0.3.0
-langchain-text-splitters>=0.3.0
+langchain>=0.1.0
+langchain-core>=0.1.0
+langchain-community>=0.0.20
+langchain-text-splitters>=0.0.1
 
 # Basic utilities
 python-dotenv>=1.0.0
