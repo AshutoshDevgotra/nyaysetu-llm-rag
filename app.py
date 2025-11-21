@@ -269,7 +269,7 @@ def build_primary_llm():
     """Create the primary LLM based on environment configuration."""
     provider = get_llm_provider()
     temperature = float(os.getenv("LLM_TEMPERATURE", "0.2"))
-    max_tokens = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "256"))
+    max_tokens = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "4096"))
     model_name = os.getenv("LLM_MODEL", "llama3")
     
     if provider == "gemini":
@@ -510,7 +510,7 @@ async def ask_question(data: QueryInput):
         context = "\n\n".join([doc.page_content for doc in docs])
         
         # Create prompt with context
-        prompt = f"""You are a legal assistant. Use the following context to answer the question concisely (1-3 sentences).
+        prompt = f"""You are a legal assistant. Use the following context to answer the question comprehensively and accurately. Do not artificially limit the length of your response, but ensure it remains relevant and clear.
 
 Context:
 {context}
