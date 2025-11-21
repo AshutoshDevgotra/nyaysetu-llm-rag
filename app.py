@@ -504,7 +504,7 @@ async def ask_question(data: QueryInput):
         logger.info(f"Processing query from frontend: {query[:50]}...")
         
         # Retrieve relevant documents
-        docs = retriever.get_relevant_documents(query)
+        docs = retriever.invoke(query)
         
         # Format context from retrieved documents
         context = "\n\n".join([doc.page_content for doc in docs])
