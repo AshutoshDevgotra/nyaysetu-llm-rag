@@ -602,10 +602,7 @@ async def test_endpoint():
         "cors_enabled": True
     })
 
-@app.options("/ask")
-async def ask_options():
-    """Handle preflight OPTIONS request for /ask endpoint"""
-    return JSONResponse(content={"message": "OK"})
+
 
 # Fixed port configuration
 FIXED_PORT = 8082
