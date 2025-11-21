@@ -6,9 +6,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
+# No complex chain imports needed - using simple direct approach
 from langchain_core.language_models.llms import LLM
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
 from typing import Any
@@ -364,30 +362,12 @@ def initialize_rag_system():
                 current_llm_provider = "fallback"
                 current_llm_model = "transformers-fallback"
             
-            # Create the modern retrieval chain
-            logger.info("Creating retrieval chain...")
             
-            # Define the prompt template for the QA system
-            system_prompt = (
-                "You are a legal assistant for question-answering tasks. "
-                "Use the following pieces of retrieved context to answer the question. "
-                "If you don't know the answer, just say that you don't know. "
-                "Keep the answer concise (1-3 sentences maximum).\\n\\n"
-                "Context: {context}"
-            )
+            # Create a simple QA function using retriever and LLM
+            logger.info("Creating simple RAG chain...")
             
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    ("system", system_prompt),
-                    ("human", "{input}"),
-                ]
-            )
-            
-            # Create the document combination chain
-            question_answer_chain = create_stuff_documents_chain(llm, prompt)
-            
-            # Create the full retrieval chain
-            qa_chain = create_retrieval_chain(retriever, question_answer_chain)
+            # Store retriever and llm globally for use in /ask endpoint
+            # No complex chain needed - we'll manually format context
             
             logger.info("RAG system initialized successfully")
             return True
@@ -513,24 +493,42 @@ async def ask_question(data: QueryInput):
         query = data.query.strip()
         logger.info(f"Processing query from frontend: {query[:50]}...")
         
-        # Process the query through the RAG chain
-        result = qa_chain.invoke({"input": query})
+        # Retrieve relevant documents
+        docs = retriever.get_relevant_documents(query)
         
-        # Extract the answer and ensure it's concise
-        answer = result.get("answer", "Unable to generate a response.")
+        # Format context from retrieved documents
+        context = "\n\n".join([doc.page_content for doc in docs])
         
-        # Extract sources if available (context contains the retrieved documents)
+        # Create prompt with context
+        prompt = f"""You are a legal assistant. Use the following context to answer the question concisely (1-3 sentences).
+
+Context:
+{context}
+
+Question: {query}
+
+Answer:"""
+        
+        # Get answer from LLM
+        answer = llm.invoke(prompt)
+        
+        # Extract text from response
+        if hasattr(answer, 'content'):
+            answer_text = answer.content
+        else:
+            answer_text = str(answer)
+        
+        # Extract sources
         sources = []
-        if "context" in result:
-            for doc in result["context"]:
-                sources.append({
-                    "content": doc.page_content[:200] + "...",
-                    "metadata": doc.metadata
-                })
+        for doc in docs:
+            sources.append({
+                "content": doc.page_content[:200] + "...",
+                "metadata": doc.metadata
+            })
         
-        logger.info(f"Successfully processed query from frontend, returning answer of length: {len(answer)}")
+        logger.info(f"Successfully processed query from frontend, returning answer of length: {len(answer_text)}")
         return QueryResponse(
-            answer=answer,
+            answer=answer_text,
             query=query,
             status="success",
             metadata={
